@@ -4,7 +4,32 @@ import { n8nGet, scrubDeep } from "./common.js";
 
 // ---------- Config ----------
 const PORT = parseInt(process.env.PORT || "3000", 10);
-const PROXY_API_KEY = randomBytes(32).toString("hex");
+const HOST = process.env.HOST || "127.0.0.1";
+const PROXY_API_KEY = process.env.PROXY_API_KEY || randomBytes(32).toString("hex");
+
+// ---------- Auth brute-force protection ----------
+const AUTH_WINDOW_MS = 60_000;
+const AUTH_MAX_FAILURES = 10;
+const authFailures = new Map(); // ip -> [timestamps]
+
+function checkAuthRateLimit(ip) {
+  const now = Date.now();
+  const timestamps = authFailures.get(ip) || [];
+  const recent = timestamps.filter((t) => now - t < AUTH_WINDOW_MS);
+  if (recent.length >= AUTH_MAX_FAILURES) {
+    return false;
+  }
+  return true;
+}
+
+function recordAuthFailure(ip) {
+  const now = Date.now();
+  const timestamps = authFailures.get(ip) || [];
+  timestamps.push(now);
+  // Keep only recent entries
+  const recent = timestamps.filter((t) => now - t < AUTH_WINDOW_MS);
+  authFailures.set(ip, recent);
+}
 
 // ---------- Helpers ----------
 function json(res, status, body) {
@@ -92,7 +117,12 @@ async function handleRequest(req, res) {
   }
 
   // Auth
+  const ip = req.socket.remoteAddress || "unknown";
+  if (!checkAuthRateLimit(ip)) {
+    return json(res, 429, { error: "Too many failed auth attempts — try again later" });
+  }
   if (!authenticate(req)) {
+    recordAuthFailure(ip);
     return json(res, 401, { error: "Unauthorized — invalid API key" });
   }
 
@@ -128,11 +158,15 @@ async function handleRequest(req, res) {
 // ---------- Start ----------
 const server = createServer(handleRequest);
 
-server.listen(PORT, () => {
-  console.log(`\n  n8n read-only proxy running on http://localhost:${PORT}`);
-  console.log(`\n  Your read-only API key:\n`);
-  console.log(`    ${PROXY_API_KEY}\n`);
-  console.log(`  Use it with header:  X-N8N-API-KEY: ${PROXY_API_KEY}`);
+server.listen(PORT, HOST, () => {
+  console.log(`\n  n8n read-only proxy running on http://${HOST}:${PORT}`);
+  if (!process.env.PROXY_API_KEY) {
+    console.log(`\n  Your read-only API key:\n`);
+    console.log(`    ${PROXY_API_KEY}\n`);
+  } else {
+    console.log(`\n  Using API key from PROXY_API_KEY env var.\n`);
+  }
+  console.log(`  Use it with header:  X-N8N-API-KEY: <your-proxy-key>`);
   console.log(`  Endpoints:`);
   console.log(`    GET /api/v1/workflows`);
   console.log(`    GET /api/v1/workflows/:id\n`);
