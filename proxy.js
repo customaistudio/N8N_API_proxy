@@ -104,6 +104,75 @@ async function getWorkflow(id) {
   return { status: 200, body: scrubDeep(data) };
 }
 
+// ---------- Execution handlers ----------
+const VALID_EXEC_STATUSES = new Set(["error", "new", "running", "success", "waiting"]);
+
+async function listExecutions(url) {
+  const params = url.searchParams;
+  const query = new URLSearchParams();
+
+  const cursor = params.get("cursor");
+  const limit = params.get("limit");
+  const workflowId = params.get("workflowId");
+  const status = params.get("status");
+
+  if (cursor) {
+    if (!/^[A-Za-z0-9+/=_-]+$/.test(cursor) || cursor.length > 512) {
+      return { status: 400, body: { error: "Invalid cursor" } };
+    }
+    query.set("cursor", cursor);
+  }
+
+  if (limit) {
+    const n = parseInt(limit, 10);
+    if (isNaN(n) || n < 1 || n > 250) {
+      return { status: 400, body: { error: "limit must be 1-250" } };
+    }
+    query.set("limit", String(n));
+  }
+
+  if (workflowId) {
+    if (!/^[A-Za-z0-9]+$/.test(workflowId) || workflowId.length > 64) {
+      return { status: 400, body: { error: "Invalid workflowId" } };
+    }
+    query.set("workflowId", workflowId);
+  }
+
+  if (status) {
+    if (!VALID_EXEC_STATUSES.has(status)) {
+      return { status: 400, body: { error: "status must be one of: error, new, running, success, waiting" } };
+    }
+    query.set("status", status);
+  }
+
+  const qs = query.toString();
+  const data = await n8nGet(`/executions${qs ? `?${qs}` : ""}`);
+
+  return {
+    status: 200,
+    body: {
+      data: data.data.map((ex) => ({
+        id: ex.id,
+        workflowId: ex.workflowId,
+        status: ex.status,
+        startedAt: ex.startedAt,
+        stoppedAt: ex.stoppedAt,
+        finished: ex.finished,
+      })),
+      nextCursor: data.nextCursor ?? null,
+    },
+  };
+}
+
+async function getExecution(id) {
+  if (!/^[A-Za-z0-9]+$/.test(id) || id.length > 64) {
+    return { status: 400, body: { error: "Invalid execution ID" } };
+  }
+
+  const data = await n8nGet(`/executions/${encodeURIComponent(id)}`);
+  return { status: 200, body: scrubDeep(data) };
+}
+
 // ---------- Router ----------
 async function handleRequest(req, res) {
   // CORS preflight
@@ -139,12 +208,17 @@ async function handleRequest(req, res) {
 
     if (path === "/api/v1/workflows") {
       result = await listWorkflows(url);
+    } else if (path === "/api/v1/executions") {
+      result = await listExecutions(url);
     } else {
-      const match = path.match(/^\/api\/v1\/workflows\/([A-Za-z0-9]+)$/);
-      if (match) {
-        result = await getWorkflow(match[1]);
+      const wfMatch = path.match(/^\/api\/v1\/workflows\/([A-Za-z0-9]+)$/);
+      const exMatch = path.match(/^\/api\/v1\/executions\/([A-Za-z0-9]+)$/);
+      if (wfMatch) {
+        result = await getWorkflow(wfMatch[1]);
+      } else if (exMatch) {
+        result = await getExecution(exMatch[1]);
       } else {
-        return json(res, 404, { error: "Not found — only /api/v1/workflows endpoints are available" });
+        return json(res, 404, { error: "Not found — available: /api/v1/workflows, /api/v1/executions" });
       }
     }
 
@@ -169,5 +243,7 @@ server.listen(PORT, HOST, () => {
   console.log(`  Use it with header:  X-N8N-API-KEY: <your-proxy-key>`);
   console.log(`  Endpoints:`);
   console.log(`    GET /api/v1/workflows`);
-  console.log(`    GET /api/v1/workflows/:id\n`);
+  console.log(`    GET /api/v1/workflows/:id`);
+  console.log(`    GET /api/v1/executions`);
+  console.log(`    GET /api/v1/executions/:id\n`);
 });
