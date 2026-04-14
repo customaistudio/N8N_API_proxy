@@ -5,8 +5,10 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
-    "proxy": "node proxy.js"
+    "start": "node --env-file=.env index.js",
+    "proxy": "node --env-file=.env proxy.js",
+    "start:production": "node index.js",
+    "proxy:production": "node proxy.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",

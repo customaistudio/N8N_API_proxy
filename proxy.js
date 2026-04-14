@@ -1,11 +1,12 @@
 import { createServer } from "node:http";
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { n8nGet, scrubDeep } from "./common.js";
 
 // ---------- Config ----------
 const PORT = parseInt(process.env.PORT || "3000", 10);
 const HOST = process.env.HOST || "127.0.0.1";
 const PROXY_API_KEY = process.env.PROXY_API_KEY || randomBytes(32).toString("hex");
+const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || null;
 
 // ---------- Auth brute-force protection ----------
 const AUTH_WINDOW_MS = 60_000;
@@ -34,15 +35,25 @@ function recordAuthFailure(ip) {
 // ---------- Helpers ----------
 function json(res, status, body) {
   const payload = JSON.stringify(body);
-  res.writeHead(status, {
+  const headers = {
     "Content-Type": "application/json",
     "Content-Length": Buffer.byteLength(payload),
-  });
+  };
+  if (ALLOWED_ORIGIN) {
+    headers["Access-Control-Allow-Origin"] = ALLOWED_ORIGIN;
+    headers["Vary"] = "Origin";
+  }
+  res.writeHead(status, headers);
   res.end(payload);
 }
 
 function authenticate(req) {
-  return req.headers["x-n8n-api-key"] === PROXY_API_KEY;
+  const supplied = req.headers["x-n8n-api-key"] || "";
+  if (supplied.length !== PROXY_API_KEY.length) return false;
+  return timingSafeEqual(
+    Buffer.from(supplied, "utf8"),
+    Buffer.from(PROXY_API_KEY, "utf8")
+  );
 }
 
 // ---------- Route handlers ----------
@@ -177,10 +188,14 @@ async function getExecution(id) {
 async function handleRequest(req, res) {
   // CORS preflight
   if (req.method === "OPTIONS") {
+    if (!ALLOWED_ORIGIN) {
+      return json(res, 403, { error: "CORS not configured" });
+    }
     res.writeHead(204, {
-      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
       "Access-Control-Allow-Methods": "GET, OPTIONS",
       "Access-Control-Allow-Headers": "X-N8N-API-KEY, Content-Type",
+      "Vary": "Origin",
     });
     return res.end();
   }
@@ -224,8 +239,13 @@ async function handleRequest(req, res) {
 
     return json(res, result.status, result.body);
   } catch (err) {
-    const status = err.message.includes("Rate limit") ? 429 : 502;
-    return json(res, status, { error: err.message });
+    const isRateLimit = err.message.includes("Rate limit");
+    const status = isRateLimit ? 429 : 502;
+    const safeMessage = isRateLimit
+      ? "Rate limit exceeded — try again later"
+      : "Upstream request failed";
+    console.error(`[${new Date().toISOString()}] ${req.method} ${path} -> ${status}: ${err.message}`);
+    return json(res, status, { error: safeMessage });
   }
 }
 
@@ -233,14 +253,19 @@ async function handleRequest(req, res) {
 const server = createServer(handleRequest);
 
 server.listen(PORT, HOST, () => {
+  const isProduction = process.env.NODE_ENV === "production" || process.env.RAILWAY_ENVIRONMENT;
+
   console.log(`\n  n8n read-only proxy running on http://${HOST}:${PORT}`);
-  if (!process.env.PROXY_API_KEY) {
+  if (!process.env.PROXY_API_KEY && !isProduction) {
     console.log(`\n  Your read-only API key:\n`);
     console.log(`    ${PROXY_API_KEY}\n`);
+  } else if (!process.env.PROXY_API_KEY && isProduction) {
+    console.log(`\n  WARNING: No PROXY_API_KEY set — using auto-generated key.`);
+    console.log(`  Set PROXY_API_KEY in your environment variables.\n`);
   } else {
     console.log(`\n  Using API key from PROXY_API_KEY env var.\n`);
   }
-  console.log(`  Use it with header:  X-N8N-API-KEY: <your-proxy-key>`);
+  console.log(`  CORS origin: ${ALLOWED_ORIGIN || "disabled (no ALLOWED_ORIGIN set)"}`);
   console.log(`  Endpoints:`);
   console.log(`    GET /api/v1/workflows`);
   console.log(`    GET /api/v1/workflows/:id`);
