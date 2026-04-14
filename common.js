@@ -31,22 +31,49 @@ function checkRateLimit() {
 }
 
 // ---------- HTTP ----------
+const FETCH_TIMEOUT_MS = 30_000;
+
 async function n8nGet(path) {
   checkRateLimit();
 
-  const res = await fetch(`${BASE_URL}/api/v1${path}`, {
-    method: "GET",
-    headers: {
-      "X-N8N-API-KEY": API_KEY,
-      Accept: "application/json",
-    },
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+  let res;
+  try {
+    res = await fetch(`${BASE_URL}/api/v1${path}`, {
+      method: "GET",
+      signal: controller.signal,
+      headers: {
+        "X-N8N-API-KEY": API_KEY,
+        Accept: "application/json",
+      },
+    });
+  } catch (err) {
+    if (err.name === "AbortError") {
+      throw new Error("n8n API request timed out");
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
 
   if (!res.ok) {
     throw new Error(`n8n API request failed with status ${res.status}`);
   }
 
-  return res.json();
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    throw new Error("n8n API returned invalid JSON");
+  }
+
+  if (!data || typeof data !== "object") {
+    throw new Error("n8n API returned unexpected response format");
+  }
+
+  return data;
 }
 
 // ---------- Secret scrubbing ----------
@@ -68,6 +95,13 @@ const SECRET_VALUE_PATTERNS = [
   /github_pat_[a-zA-Z0-9_]{50,}/g, // GitHub fine-grained PAT
   /eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+/g, // JWT
   /AIza[0-9A-Za-z_-]{35}/g, // Google API key
+  /sk_live_[a-zA-Z0-9]{20,}/g, // Stripe live key
+  /sk_test_[a-zA-Z0-9]{20,}/g, // Stripe test key
+  /AKIA[0-9A-Z]{16}/g, // AWS access key
+  /ASIA[0-9A-Z]{16}/g, // AWS temporary key
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----/g, // PEM private keys
+  /Basic [A-Za-z0-9+/]+={0,2}/g, // Basic auth
+  /Bearer [a-zA-Z0-9\-._~+/]+=*/g, // Bearer tokens
 ];
 
 function scrubString(str) {
@@ -95,13 +129,17 @@ function scrubDeep(value, keyName = "") {
 
   const out = {};
   for (const [k, v] of Object.entries(value)) {
-    if (k === "credentials" && v && typeof v === "object") {
-      out[k] = Object.fromEntries(
-        Object.entries(v).map(([credType, credRef]) => [
-          credType,
-          { name: credRef?.name ?? "[REDACTED]", id: "[REDACTED]" },
-        ])
-      );
+    if (/^credential/i.test(k) && v && typeof v === "object") {
+      if (k === "credentials") {
+        out[k] = Object.fromEntries(
+          Object.entries(v).map(([credType, credRef]) => [
+            credType,
+            { name: credRef?.name ?? "[REDACTED]", id: "[REDACTED]" },
+          ])
+        );
+      } else {
+        out[k] = "[REDACTED]";
+      }
       continue;
     }
     out[k] = scrubDeep(v, k);

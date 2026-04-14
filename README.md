@@ -1,6 +1,6 @@
 # n8n-readonly-mcp
 
-Hardened read-only MCP (Model Context Protocol) proxy for n8n. Exposes only `list_workflows` and `get_workflow` to Claude Code / other MCP clients, with secret scrubbing, rate limiting, input validation, and sanitized error handling.
+Hardened read-only MCP (Model Context Protocol) proxy for n8n. Exposes only read-only tools (`list_workflows`, `get_workflow`, `list_executions`, `get_execution`) to Claude Code / other MCP clients, with secret scrubbing, rate limiting, input validation, and sanitized error handling.
 
 ## Why this exists
 
@@ -10,9 +10,9 @@ The n8n public API has no read-only key scope — any valid API key can create, 
 
 | Fix | Description |
 |---|---|
-| **Allowlist tools** | Only `list_workflows` and `get_workflow` are registered — no write surface |
+| **Allowlist tools** | Only `list_workflows`, `get_workflow`, `list_executions`, and `get_execution` are registered — no write surface |
 | **ID validation** | Workflow ID must match `^[A-Za-z0-9]+$` (max 64 chars) — blocks path traversal and injection |
-| **Secret scrubbing** | Deep-scrubs response JSON: redacts keys matching `authorization`/`api-key`/`secret`/`token`/`password`/`credential`/`bearer`, strips embedded credentials, and regex-matches known secret formats (OpenAI, Slack, GitHub PAT, JWT, Google API key) |
+| **Secret scrubbing** | Deep-scrubs response JSON: redacts keys matching `authorization`/`api-key`/`secret`/`token`/`password`/`credential`/`bearer`, strips embedded credentials, and regex-matches known secret formats (OpenAI, Slack, GitHub PAT, JWT, Google API key, AWS, Stripe, PEM private keys, Basic/Bearer auth) |
 | **Rate limiting** | 30 calls / 60 seconds per process — prevents bulk exfiltration in a single session |
 | **Cursor bounds** | Pagination cursor must be URL-safe, max 512 chars |
 | **Error sanitization** | Upstream error bodies are never forwarded — only the status code |
@@ -90,6 +90,29 @@ Get full details of a workflow by ID. Secrets are redacted before return.
 | `id` | string (required, `^[A-Za-z0-9]+$`, max 64) | Workflow ID |
 
 Returns: full workflow JSON with credentials, API keys, JWTs, and known secret patterns replaced with `[REDACTED]`.
+
+### `list_executions`
+
+List n8n executions with optional filters.
+
+| Param | Type | Description |
+|---|---|---|
+| `cursor` | string (optional) | Pagination cursor from a previous response |
+| `limit` | integer 1–250 (optional) | Page size (default 100) |
+| `workflowId` | string (optional) | Filter by workflow ID |
+| `status` | enum (optional) | Filter by status: `error`, `new`, `running`, `success`, `waiting` |
+
+Returns: `{ executions: [...], nextCursor: string | null }`
+
+### `get_execution`
+
+Get full details of an execution by ID. Secrets are redacted before return.
+
+| Param | Type | Description |
+|---|---|---|
+| `id` | string (required, `^[A-Za-z0-9]+$`, max 64) | Execution ID |
+
+Returns: full execution JSON with secrets replaced with `[REDACTED]`.
 
 ## Development
 

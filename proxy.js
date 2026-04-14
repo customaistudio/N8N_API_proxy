@@ -4,9 +4,23 @@ import { n8nGet, scrubDeep } from "./common.js";
 
 // ---------- Config ----------
 const PORT = parseInt(process.env.PORT || "3000", 10);
+if (PORT < 1 || PORT > 65535 || isNaN(PORT)) {
+  console.error("Invalid PORT: must be 1-65535");
+  process.exit(1);
+}
 const HOST = process.env.HOST || "127.0.0.1";
 const PROXY_API_KEY = process.env.PROXY_API_KEY || randomBytes(32).toString("hex");
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || null;
+const MAX_URL_LENGTH = 8192;
+
+if (ALLOWED_ORIGIN === "*") {
+  console.error('ALLOWED_ORIGIN must not be "*" — set a specific origin (e.g. https://example.com)');
+  process.exit(1);
+}
+if (ALLOWED_ORIGIN && !ALLOWED_ORIGIN.startsWith("http")) {
+  console.error("ALLOWED_ORIGIN must be a full origin (e.g. https://example.com)");
+  process.exit(1);
+}
 
 // ---------- Auth brute-force protection ----------
 const AUTH_WINDOW_MS = 60_000;
@@ -33,13 +47,20 @@ function recordAuthFailure(ip) {
 }
 
 // ---------- Helpers ----------
-function json(res, status, body) {
+function getClientIP(req) {
+  const forwarded = req.headers["x-forwarded-for"];
+  return forwarded ? forwarded.split(",")[0].trim() : req.socket.remoteAddress || "unknown";
+}
+
+function json(res, status, body, req) {
   const payload = JSON.stringify(body);
   const headers = {
     "Content-Type": "application/json",
     "Content-Length": Buffer.byteLength(payload),
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
   };
-  if (ALLOWED_ORIGIN) {
+  if (ALLOWED_ORIGIN && req?.headers?.origin === ALLOWED_ORIGIN) {
     headers["Access-Control-Allow-Origin"] = ALLOWED_ORIGIN;
     headers["Vary"] = "Origin";
   }
@@ -89,6 +110,10 @@ async function listWorkflows(url) {
 
   const qs = query.toString();
   const data = await n8nGet(`/workflows${qs ? `?${qs}` : ""}`);
+
+  if (!Array.isArray(data.data)) {
+    throw new Error("Unexpected response format from n8n API");
+  }
 
   return {
     status: 200,
@@ -159,6 +184,10 @@ async function listExecutions(url) {
   const qs = query.toString();
   const data = await n8nGet(`/executions${qs ? `?${qs}` : ""}`);
 
+  if (!Array.isArray(data.data)) {
+    throw new Error("Unexpected response format from n8n API");
+  }
+
   return {
     status: 200,
     body: {
@@ -186,33 +215,41 @@ async function getExecution(id) {
 
 // ---------- Router ----------
 async function handleRequest(req, res) {
+  // URL length guard
+  if (req.url.length > MAX_URL_LENGTH) {
+    return json(res, 414, { error: "Request URL too large" }, req);
+  }
+
   // CORS preflight
   if (req.method === "OPTIONS") {
-    if (!ALLOWED_ORIGIN) {
-      return json(res, 403, { error: "CORS not configured" });
+    const origin = req.headers.origin || "";
+    if (ALLOWED_ORIGIN && origin === ALLOWED_ORIGIN) {
+      res.writeHead(204, {
+        "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
+        "Access-Control-Allow-Methods": "GET, OPTIONS",
+        "Access-Control-Allow-Headers": "X-N8N-API-KEY, Content-Type",
+        "Vary": "Origin",
+        "X-Content-Type-Options": "nosniff",
+      });
+      return res.end();
     }
-    res.writeHead(204, {
-      "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
-      "Access-Control-Allow-Methods": "GET, OPTIONS",
-      "Access-Control-Allow-Headers": "X-N8N-API-KEY, Content-Type",
-      "Vary": "Origin",
-    });
+    res.writeHead(403, { "X-Content-Type-Options": "nosniff" });
     return res.end();
   }
 
   // Auth
-  const ip = req.socket.remoteAddress || "unknown";
+  const ip = getClientIP(req);
   if (!checkAuthRateLimit(ip)) {
-    return json(res, 429, { error: "Too many failed auth attempts — try again later" });
+    return json(res, 429, { error: "Too many failed auth attempts — try again later" }, req);
   }
   if (!authenticate(req)) {
     recordAuthFailure(ip);
-    return json(res, 401, { error: "Unauthorized — invalid API key" });
+    return json(res, 401, { error: "Unauthorized — invalid API key" }, req);
   }
 
   // Only GET allowed
   if (req.method !== "GET") {
-    return json(res, 405, { error: "Method not allowed — read-only proxy" });
+    return json(res, 405, { error: "Method not allowed — read-only proxy" }, req);
   }
 
   const url = new URL(req.url, `http://localhost:${PORT}`);
@@ -233,11 +270,11 @@ async function handleRequest(req, res) {
       } else if (exMatch) {
         result = await getExecution(exMatch[1]);
       } else {
-        return json(res, 404, { error: "Not found — available: /api/v1/workflows, /api/v1/executions" });
+        return json(res, 404, { error: "Not found — available: /api/v1/workflows, /api/v1/executions" }, req);
       }
     }
 
-    return json(res, result.status, result.body);
+    return json(res, result.status, result.body, req);
   } catch (err) {
     const isRateLimit = err.message.includes("Rate limit");
     const status = isRateLimit ? 429 : 502;
@@ -245,7 +282,7 @@ async function handleRequest(req, res) {
       ? "Rate limit exceeded — try again later"
       : "Upstream request failed";
     console.error(`[${new Date().toISOString()}] ${req.method} ${path} -> ${status}: ${err.message}`);
-    return json(res, status, { error: safeMessage });
+    return json(res, status, { error: safeMessage }, req);
   }
 }
 

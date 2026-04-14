@@ -3,6 +3,11 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { n8nGet, scrubDeep } from "./common.js";
 
+process.on("unhandledRejection", (reason) => {
+  console.error("[FATAL] Unhandled rejection:", reason);
+  process.exit(1);
+});
+
 // ---------- Server ----------
 const server = new McpServer({
   name: "n8n-readonly",
@@ -36,6 +41,10 @@ server.tool(
 
     const query = params.toString();
     const data = await n8nGet(`/workflows${query ? `?${query}` : ""}`);
+
+    if (!Array.isArray(data.data)) {
+      throw new Error("Unexpected response format from n8n API");
+    }
 
     const workflows = data.data.map((wf) => ({
       id: wf.id,
@@ -127,6 +136,10 @@ server.tool(
 
     const query = params.toString();
     const data = await n8nGet(`/executions${query ? `?${query}` : ""}`);
+
+    if (!Array.isArray(data.data)) {
+      throw new Error("Unexpected response format from n8n API");
+    }
 
     const executions = data.data.map((ex) => ({
       id: ex.id,
