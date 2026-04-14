@@ -114,11 +114,63 @@ Get full details of an execution by ID. Secrets are redacted before return.
 
 Returns: full execution JSON with secrets replaced with `[REDACTED]`.
 
+## HTTP Proxy Mode
+
+The project includes an HTTP proxy (`proxy.js`) that wraps the same read-only endpoints behind an authenticated HTTP API. Use this for deploying to Railway, Render, or any cloud platform.
+
+```bash
+# Local development (loads .env file)
+npm run proxy
+
+# Production (reads env vars from the platform)
+npm run proxy:production
+```
+
+### Endpoints
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `GET` | `/health` | No | Health check — returns `{ "status": "ok" }` |
+| `GET` | `/api/v1/workflows` | Yes | List workflows |
+| `GET` | `/api/v1/workflows/:id` | Yes | Get workflow by ID |
+| `GET` | `/api/v1/executions` | Yes | List executions |
+| `GET` | `/api/v1/executions/:id` | Yes | Get execution by ID |
+
+Authenticated endpoints require the header: `X-N8N-API-KEY: <your-proxy-key>`
+
+### Environment variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `N8N_API_KEY` | Yes | Your n8n instance API key |
+| `N8N_BASE_URL` | Yes | Your n8n instance URL (e.g. `https://your-instance.n8n.cloud`) |
+| `PROXY_API_KEY` | Yes (prod) | Key clients use to authenticate with the proxy |
+| `PORT` | No | Listen port (default: `3000`) |
+| `HOST` | No | Listen host (default: `127.0.0.1`, set to `0.0.0.0` for containers) |
+| `ALLOWED_ORIGIN` | No | CORS origin (disabled by default) |
+| `TRUST_PROXY` | No | Set `true` behind a load balancer to use `X-Forwarded-For` for rate limiting |
+
+## Deploy to Railway
+
+1. Push this repo to GitHub
+2. Create a new Railway project from the repo
+3. Set environment variables in the Railway dashboard:
+   - `N8N_API_KEY`, `N8N_BASE_URL`, `PROXY_API_KEY`
+   - `HOST=0.0.0.0`
+   - `TRUST_PROXY=true`
+4. Railway will detect the `Procfile` and start the HTTP proxy automatically
+5. Set the health check path to `/health` in Railway's service settings
+
 ## Development
 
 ```bash
 npm install
+
+# MCP mode (stdio transport, for Claude Code)
 N8N_API_KEY="..." N8N_BASE_URL="https://..." node index.js
+
+# HTTP proxy mode (local)
+npm run proxy
 ```
 
 ## License

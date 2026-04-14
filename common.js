@@ -7,6 +7,13 @@ if (!API_KEY || !BASE_URL) {
   process.exit(1);
 }
 
+try {
+  new URL(BASE_URL);
+} catch {
+  console.error("Invalid N8N_BASE_URL: must be a valid URL (e.g. https://your-instance.n8n.cloud)");
+  process.exit(1);
+}
+
 // ---------- Rate limit (per process) ----------
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX_CALLS = 30;
@@ -147,4 +154,4 @@ function scrubDeep(value, keyName = "") {
   return out;
 }
 
-export { n8nGet, scrubDeep, checkRateLimit };
+export { n8nGet, scrubDeep };

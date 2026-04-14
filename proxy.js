@@ -2,6 +2,11 @@ import { createServer } from "node:http";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { n8nGet, scrubDeep } from "./common.js";
 
+process.on("unhandledRejection", (reason) => {
+  console.error("[FATAL] Unhandled rejection:", reason);
+  process.exit(1);
+});
+
 // ---------- Config ----------
 const PORT = parseInt(process.env.PORT || "3000", 10);
 if (PORT < 1 || PORT > 65535 || isNaN(PORT)) {
@@ -11,6 +16,7 @@ if (PORT < 1 || PORT > 65535 || isNaN(PORT)) {
 const HOST = process.env.HOST || "127.0.0.1";
 const PROXY_API_KEY = process.env.PROXY_API_KEY || randomBytes(32).toString("hex");
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || null;
+const TRUST_PROXY = process.env.TRUST_PROXY === "true";
 const MAX_URL_LENGTH = 8192;
 
 if (ALLOWED_ORIGIN === "*") {
@@ -25,7 +31,21 @@ if (ALLOWED_ORIGIN && !ALLOWED_ORIGIN.startsWith("http")) {
 // ---------- Auth brute-force protection ----------
 const AUTH_WINDOW_MS = 60_000;
 const AUTH_MAX_FAILURES = 10;
+const AUTH_MAP_MAX_SIZE = 10_000;
 const authFailures = new Map(); // ip -> [timestamps]
+
+// Evict stale IPs every 5 minutes to prevent unbounded memory growth
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, timestamps] of authFailures) {
+    const recent = timestamps.filter((t) => now - t < AUTH_WINDOW_MS);
+    if (recent.length === 0) {
+      authFailures.delete(ip);
+    } else {
+      authFailures.set(ip, recent);
+    }
+  }
+}, 5 * 60_000).unref();
 
 function checkAuthRateLimit(ip) {
   const now = Date.now();
@@ -38,18 +58,24 @@ function checkAuthRateLimit(ip) {
 }
 
 function recordAuthFailure(ip) {
+  // Prevent memory exhaustion from distributed attacks
+  if (!authFailures.has(ip) && authFailures.size >= AUTH_MAP_MAX_SIZE) {
+    return;
+  }
   const now = Date.now();
   const timestamps = authFailures.get(ip) || [];
   timestamps.push(now);
-  // Keep only recent entries
   const recent = timestamps.filter((t) => now - t < AUTH_WINDOW_MS);
   authFailures.set(ip, recent);
 }
 
 // ---------- Helpers ----------
 function getClientIP(req) {
-  const forwarded = req.headers["x-forwarded-for"];
-  return forwarded ? forwarded.split(",")[0].trim() : req.socket.remoteAddress || "unknown";
+  if (TRUST_PROXY) {
+    const forwarded = req.headers["x-forwarded-for"];
+    if (forwarded) return forwarded.split(",")[0].trim();
+  }
+  return req.socket.remoteAddress || "unknown";
 }
 
 function json(res, status, body, req) {
@@ -220,6 +246,11 @@ async function handleRequest(req, res) {
     return json(res, 414, { error: "Request URL too large" }, req);
   }
 
+  // Health check (no auth required)
+  if (req.method === "GET" && req.url === "/health") {
+    return json(res, 200, { status: "ok" }, req);
+  }
+
   // CORS preflight
   if (req.method === "OPTIONS") {
     const origin = req.headers.origin || "";
@@ -302,10 +333,29 @@ server.listen(PORT, HOST, () => {
   } else {
     console.log(`\n  Using API key from PROXY_API_KEY env var.\n`);
   }
+  console.log(`  Trust proxy: ${TRUST_PROXY ? "yes" : "no"}`);
   console.log(`  CORS origin: ${ALLOWED_ORIGIN || "disabled (no ALLOWED_ORIGIN set)"}`);
   console.log(`  Endpoints:`);
+  console.log(`    GET /health`);
   console.log(`    GET /api/v1/workflows`);
   console.log(`    GET /api/v1/workflows/:id`);
   console.log(`    GET /api/v1/executions`);
   console.log(`    GET /api/v1/executions/:id\n`);
 });
+
+// ---------- Graceful shutdown ----------
+function shutdown(signal) {
+  console.log(`\n  ${signal} received — shutting down...`);
+  server.close(() => {
+    console.log("  Server closed.");
+    process.exit(0);
+  });
+  // Force exit after 10s if connections don't drain
+  setTimeout(() => {
+    console.error("  Forced exit — connections did not drain in time.");
+    process.exit(1);
+  }, 10_000).unref();
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));

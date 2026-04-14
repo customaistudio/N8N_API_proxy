@@ -8,6 +8,6 @@ set -euo pipefail
 # Replace N8N_BASE_URL with your instance URL.
 
 export N8N_API_KEY="$(security find-generic-password -s n8n-api-key -w)"
-export N8N_BASE_URL="${N8N_BASE_URL:-https://your-instance.app.n8n.cloud}"
+export N8N_BASE_URL="${N8N_BASE_URL:?Error: N8N_BASE_URL not set. Export it or set in .env}"
 
 exec node "$(dirname "$0")/index.js"
