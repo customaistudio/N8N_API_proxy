@@ -162,6 +162,7 @@ function serveHomepage(res) {
 <p>All endpoints (except <code>/health</code> and this page) require the <code>X-N8N-API-KEY</code> header set to your <code>PROXY_API_KEY</code>.</p>
 
 <div class="endpoint"><span class="method">GET</span> <span class="path">/health</span> <span class="desc">Health check (no auth)</span></div>
+<div class="endpoint"><span class="method">GET</span> <span class="path">/api/v1/projects</span> <span class="desc">List all projects</span></div>
 <div class="endpoint"><span class="method">GET</span> <span class="path">/api/v1/workflows</span> <span class="desc">List all workflows</span></div>
 <div class="endpoint"><span class="method">GET</span> <span class="path">/api/v1/workflows/:id</span> <span class="desc">Get workflow details</span></div>
 <div class="endpoint"><span class="method">GET</span> <span class="path">/api/v1/executions</span> <span class="desc">List executions</span></div>
@@ -169,8 +170,9 @@ function serveHomepage(res) {
 
 <h3>Query Parameters</h3>
 <ul>
-  <li><code>/api/v1/workflows</code> &mdash; <code>cursor</code>, <code>limit</code> (1-250), <code>active</code> (true/false)</li>
-  <li><code>/api/v1/executions</code> &mdash; <code>cursor</code>, <code>limit</code> (1-250), <code>workflowId</code>, <code>status</code> (error/new/running/success/waiting)</li>
+  <li><code>/api/v1/projects</code> &mdash; <code>cursor</code>, <code>limit</code> (1-250)</li>
+  <li><code>/api/v1/workflows</code> &mdash; <code>cursor</code>, <code>limit</code> (1-250), <code>active</code> (true/false), <code>projectId</code></li>
+  <li><code>/api/v1/executions</code> &mdash; <code>cursor</code>, <code>limit</code> (1-250), <code>workflowId</code>, <code>status</code> (error/new/running/success/waiting), <code>projectId</code></li>
 </ul>
 
 <h2>Quick Start</h2>
@@ -213,11 +215,12 @@ N8N_BASE_URL=https://your-instance.app.n8n.cloud</code></pre>
   }
 }</code></pre>
   </li>
-  <li>Restart Claude Desktop. You'll see 4 new tools available:
+  <li>Restart Claude Desktop. You'll see 5 new tools available:
     <ul>
-      <li><code>list_workflows</code> &mdash; List all workflows with IDs, names, active status, and tags</li>
+      <li><code>list_projects</code> &mdash; List all projects (workspaces) to discover project IDs</li>
+      <li><code>list_workflows</code> &mdash; List workflows, optionally filtered by project ID</li>
       <li><code>get_workflow</code> &mdash; Get full workflow details (nodes, connections, settings)</li>
-      <li><code>list_executions</code> &mdash; List executions with optional filters</li>
+      <li><code>list_executions</code> &mdash; List executions, optionally filtered by project ID</li>
       <li><code>get_execution</code> &mdash; Get full execution details including node results</li>
     </ul>
   </li>
@@ -251,6 +254,50 @@ N8N_BASE_URL=https://your-instance.app.n8n.cloud</code></pre>
 }
 
 // ---------- Route handlers ----------
+async function listProjects(url) {
+  const params = url.searchParams;
+  const query = new URLSearchParams();
+
+  const cursor = params.get("cursor");
+  const limit = params.get("limit");
+
+  if (cursor) {
+    if (!/^[A-Za-z0-9+/=_-]+$/.test(cursor) || cursor.length > 512) {
+      return { status: 400, body: { error: "Invalid cursor" } };
+    }
+    query.set("cursor", cursor);
+  }
+
+  if (limit) {
+    const n = parseInt(limit, 10);
+    if (isNaN(n) || n < 1 || n > 250) {
+      return { status: 400, body: { error: "limit must be 1-250" } };
+    }
+    query.set("limit", String(n));
+  }
+
+  const qs = query.toString();
+  const data = await n8nGet(`/projects${qs ? `?${qs}` : ""}`);
+
+  if (!Array.isArray(data.data)) {
+    throw new Error("Unexpected response format from n8n API");
+  }
+
+  return {
+    status: 200,
+    body: {
+      data: data.data.map((p) => ({
+        id: p.id,
+        name: p.name,
+        type: p.type,
+        createdAt: p.createdAt,
+        updatedAt: p.updatedAt,
+      })),
+      nextCursor: data.nextCursor ?? null,
+    },
+  };
+}
+
 async function listWorkflows(url) {
   const params = url.searchParams;
   const query = new URLSearchParams();
@@ -258,6 +305,7 @@ async function listWorkflows(url) {
   const cursor = params.get("cursor");
   const limit = params.get("limit");
   const active = params.get("active");
+  const projectId = params.get("projectId");
 
   if (cursor) {
     if (!/^[A-Za-z0-9+/=_-]+$/.test(cursor) || cursor.length > 512) {
@@ -279,6 +327,13 @@ async function listWorkflows(url) {
       return { status: 400, body: { error: "active must be true or false" } };
     }
     query.set("active", active);
+  }
+
+  if (projectId) {
+    if (!/^[A-Za-z0-9_-]+$/.test(projectId) || projectId.length > 64) {
+      return { status: 400, body: { error: "Invalid projectId" } };
+    }
+    query.set("projectId", projectId);
   }
 
   const qs = query.toString();
@@ -324,6 +379,7 @@ async function listExecutions(url) {
   const limit = params.get("limit");
   const workflowId = params.get("workflowId");
   const status = params.get("status");
+  const projectId = params.get("projectId");
 
   if (cursor) {
     if (!/^[A-Za-z0-9+/=_-]+$/.test(cursor) || cursor.length > 512) {
@@ -352,6 +408,13 @@ async function listExecutions(url) {
       return { status: 400, body: { error: "status must be one of: error, new, running, success, waiting" } };
     }
     query.set("status", status);
+  }
+
+  if (projectId) {
+    if (!/^[A-Za-z0-9_-]+$/.test(projectId) || projectId.length > 64) {
+      return { status: 400, body: { error: "Invalid projectId" } };
+    }
+    query.set("projectId", projectId);
   }
 
   const qs = query.toString();
@@ -441,7 +504,9 @@ async function handleRequest(req, res) {
   try {
     let result;
 
-    if (path === "/api/v1/workflows") {
+    if (path === "/api/v1/projects") {
+      result = await listProjects(url);
+    } else if (path === "/api/v1/workflows") {
       result = await listWorkflows(url);
     } else if (path === "/api/v1/executions") {
       result = await listExecutions(url);
@@ -489,6 +554,7 @@ server.listen(PORT, HOST, () => {
   console.log(`  CORS origin: ${ALLOWED_ORIGIN || "disabled (no ALLOWED_ORIGIN set)"}`);
   console.log(`  Endpoints:`);
   console.log(`    GET /health`);
+  console.log(`    GET /api/v1/projects`);
   console.log(`    GET /api/v1/workflows`);
   console.log(`    GET /api/v1/workflows/:id`);
   console.log(`    GET /api/v1/executions`);

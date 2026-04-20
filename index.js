@@ -14,9 +14,69 @@ const server = new McpServer({
   version: "1.1.0",
 });
 
+// ---------- Projects ----------
+const PROJECT_ID_SCHEMA = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[A-Za-z0-9_-]+$/, "Project ID must be alphanumeric (hyphens/underscores allowed)");
+
+server.tool(
+  "list_projects",
+  "List all n8n projects (workspaces) with their IDs and names. Use project IDs to filter workflows and executions by project.",
+  {
+    cursor: z
+      .string()
+      .max(512)
+      .regex(/^[A-Za-z0-9+/=_-]+$/, "cursor must be a URL-safe token")
+      .optional()
+      .describe("Pagination cursor from a previous response"),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(250)
+      .optional()
+      .describe("Number of projects to return (default 100, max 250)"),
+  },
+  async ({ cursor, limit }) => {
+    const params = new URLSearchParams();
+    if (cursor) params.set("cursor", cursor);
+    if (limit) params.set("limit", String(limit));
+
+    const query = params.toString();
+    const data = await n8nGet(`/projects${query ? `?${query}` : ""}`);
+
+    if (!Array.isArray(data.data)) {
+      throw new Error("Unexpected response format from n8n API");
+    }
+
+    const projects = data.data.map((p) => ({
+      id: p.id,
+      name: p.name,
+      type: p.type,
+      createdAt: p.createdAt,
+      updatedAt: p.updatedAt,
+    }));
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            { projects, nextCursor: data.nextCursor ?? null },
+            null,
+            2
+          ),
+        },
+      ],
+    };
+  }
+);
+
 server.tool(
   "list_workflows",
-  "List all n8n workflows with their IDs, names, active status, and tags",
+  "List all n8n workflows with their IDs, names, active status, and tags. Optionally filter by project ID to see workflows across different projects.",
   {
     cursor: z
       .string()
@@ -32,12 +92,16 @@ server.tool(
       .optional()
       .describe("Number of workflows to return (default 100, max 250)"),
     active: z.boolean().optional().describe("Filter by active status"),
+    projectId: PROJECT_ID_SCHEMA.optional().describe(
+      "Filter workflows by project ID (use list_projects to get project IDs)"
+    ),
   },
-  async ({ cursor, limit, active }) => {
+  async ({ cursor, limit, active, projectId }) => {
     const params = new URLSearchParams();
     if (cursor) params.set("cursor", cursor);
     if (limit) params.set("limit", String(limit));
     if (active !== undefined) params.set("active", String(active));
+    if (projectId) params.set("projectId", projectId);
 
     const query = params.toString();
     const data = await n8nGet(`/workflows${query ? `?${query}` : ""}`);
@@ -107,7 +171,7 @@ const EXECUTION_STATUS_SCHEMA = z
 
 server.tool(
   "list_executions",
-  "List n8n executions with optional filters by workflow ID and status",
+  "List n8n executions with optional filters by workflow ID, status, and project ID",
   {
     cursor: z
       .string()
@@ -126,13 +190,17 @@ server.tool(
       "Filter executions by workflow ID"
     ),
     status: EXECUTION_STATUS_SCHEMA,
+    projectId: PROJECT_ID_SCHEMA.optional().describe(
+      "Filter executions by project ID (use list_projects to get project IDs)"
+    ),
   },
-  async ({ cursor, limit, workflowId, status }) => {
+  async ({ cursor, limit, workflowId, status, projectId }) => {
     const params = new URLSearchParams();
     if (cursor) params.set("cursor", cursor);
     if (limit) params.set("limit", String(limit));
     if (workflowId) params.set("workflowId", workflowId);
     if (status) params.set("status", status);
+    if (projectId) params.set("projectId", projectId);
 
     const query = params.toString();
     const data = await n8nGet(`/executions${query ? `?${query}` : ""}`);

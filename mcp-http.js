@@ -29,23 +29,54 @@ const EXECUTION_ID_SCHEMA = z
   .string().min(1).max(64)
   .regex(/^[A-Za-z0-9]+$/, "Execution ID must be alphanumeric");
 
+const PROJECT_ID_SCHEMA = z
+  .string().min(1).max(64)
+  .regex(/^[A-Za-z0-9_-]+$/, "Project ID must be alphanumeric (hyphens/underscores allowed)");
+
 // ---------- Register tools on an McpServer instance ----------
 function registerTools(server) {
   server.tool(
+    "list_projects",
+    "List all n8n projects (workspaces) with their IDs and names. Use project IDs to filter workflows and executions by project.",
+    {
+      cursor: z.string().max(512).regex(/^[A-Za-z0-9+/=_-]+$/).optional()
+        .describe("Pagination cursor from a previous response"),
+      limit: z.number().int().min(1).max(250).optional()
+        .describe("Number of projects to return (default 100, max 250)"),
+    },
+    async ({ cursor, limit }) => {
+      const params = new URLSearchParams();
+      if (cursor) params.set("cursor", cursor);
+      if (limit) params.set("limit", String(limit));
+      const query = params.toString();
+      const data = await n8nGet(`/projects${query ? `?${query}` : ""}`);
+      if (!Array.isArray(data.data)) throw new Error("Unexpected response format");
+      const projects = data.data.map((p) => ({
+        id: p.id, name: p.name, type: p.type,
+        createdAt: p.createdAt, updatedAt: p.updatedAt,
+      }));
+      return { content: [{ type: "text", text: JSON.stringify({ projects, nextCursor: data.nextCursor ?? null }, null, 2) }] };
+    }
+  );
+
+  server.tool(
     "list_workflows",
-    "List all n8n workflows with their IDs, names, active status, and tags",
+    "List all n8n workflows with their IDs, names, active status, and tags. Optionally filter by project ID to see workflows across different projects.",
     {
       cursor: z.string().max(512).regex(/^[A-Za-z0-9+/=_-]+$/).optional()
         .describe("Pagination cursor from a previous response"),
       limit: z.number().int().min(1).max(250).optional()
         .describe("Number of workflows to return (default 100, max 250)"),
       active: z.boolean().optional().describe("Filter by active status"),
+      projectId: PROJECT_ID_SCHEMA.optional()
+        .describe("Filter workflows by project ID (use list_projects to get project IDs)"),
     },
-    async ({ cursor, limit, active }) => {
+    async ({ cursor, limit, active, projectId }) => {
       const params = new URLSearchParams();
       if (cursor) params.set("cursor", cursor);
       if (limit) params.set("limit", String(limit));
       if (active !== undefined) params.set("active", String(active));
+      if (projectId) params.set("projectId", projectId);
       const query = params.toString();
       const data = await n8nGet(`/workflows${query ? `?${query}` : ""}`);
       if (!Array.isArray(data.data)) throw new Error("Unexpected response format");
@@ -70,7 +101,7 @@ function registerTools(server) {
 
   server.tool(
     "list_executions",
-    "List n8n executions with optional filters by workflow ID and status",
+    "List n8n executions with optional filters by workflow ID, status, and project ID",
     {
       cursor: z.string().max(512).regex(/^[A-Za-z0-9+/=_-]+$/).optional()
         .describe("Pagination cursor from a previous response"),
@@ -79,13 +110,16 @@ function registerTools(server) {
       workflowId: WORKFLOW_ID_SCHEMA.optional().describe("Filter executions by workflow ID"),
       status: z.enum(["error", "new", "running", "success", "waiting"]).optional()
         .describe("Filter by execution status"),
+      projectId: PROJECT_ID_SCHEMA.optional()
+        .describe("Filter executions by project ID (use list_projects to get project IDs)"),
     },
-    async ({ cursor, limit, workflowId, status }) => {
+    async ({ cursor, limit, workflowId, status, projectId }) => {
       const params = new URLSearchParams();
       if (cursor) params.set("cursor", cursor);
       if (limit) params.set("limit", String(limit));
       if (workflowId) params.set("workflowId", workflowId);
       if (status) params.set("status", status);
+      if (projectId) params.set("projectId", projectId);
       const query = params.toString();
       const data = await n8nGet(`/executions${query ? `?${query}` : ""}`);
       if (!Array.isArray(data.data)) throw new Error("Unexpected response format");
@@ -128,12 +162,39 @@ function authenticateApiKey(req) {
 // ---------- REST route handlers ----------
 const VALID_EXEC_STATUSES = new Set(["error", "new", "running", "success", "waiting"]);
 
+async function restListProjects(url) {
+  const params = url.searchParams;
+  const query = new URLSearchParams();
+  const cursor = params.get("cursor");
+  const limit = params.get("limit");
+  if (cursor) {
+    if (!/^[A-Za-z0-9+/=_-]+$/.test(cursor) || cursor.length > 512) return { status: 400, body: { error: "Invalid cursor" } };
+    query.set("cursor", cursor);
+  }
+  if (limit) {
+    const n = parseInt(limit, 10);
+    if (isNaN(n) || n < 1 || n > 250) return { status: 400, body: { error: "limit must be 1-250" } };
+    query.set("limit", String(n));
+  }
+  const qs = query.toString();
+  const data = await n8nGet(`/projects${qs ? `?${qs}` : ""}`);
+  if (!Array.isArray(data.data)) throw new Error("Unexpected response format");
+  return {
+    status: 200,
+    body: {
+      data: data.data.map((p) => ({ id: p.id, name: p.name, type: p.type, createdAt: p.createdAt, updatedAt: p.updatedAt })),
+      nextCursor: data.nextCursor ?? null,
+    },
+  };
+}
+
 async function restListWorkflows(url) {
   const params = url.searchParams;
   const query = new URLSearchParams();
   const cursor = params.get("cursor");
   const limit = params.get("limit");
   const active = params.get("active");
+  const projectId = params.get("projectId");
   if (cursor) {
     if (!/^[A-Za-z0-9+/=_-]+$/.test(cursor) || cursor.length > 512) return { status: 400, body: { error: "Invalid cursor" } };
     query.set("cursor", cursor);
@@ -146,6 +207,10 @@ async function restListWorkflows(url) {
   if (active !== null) {
     if (active !== "true" && active !== "false") return { status: 400, body: { error: "active must be true or false" } };
     query.set("active", active);
+  }
+  if (projectId) {
+    if (!/^[A-Za-z0-9_-]+$/.test(projectId) || projectId.length > 64) return { status: 400, body: { error: "Invalid projectId" } };
+    query.set("projectId", projectId);
   }
   const qs = query.toString();
   const data = await n8nGet(`/workflows${qs ? `?${qs}` : ""}`);
@@ -172,6 +237,7 @@ async function restListExecutions(url) {
   const limit = params.get("limit");
   const workflowId = params.get("workflowId");
   const status = params.get("status");
+  const projectId = params.get("projectId");
   if (cursor) {
     if (!/^[A-Za-z0-9+/=_-]+$/.test(cursor) || cursor.length > 512) return { status: 400, body: { error: "Invalid cursor" } };
     query.set("cursor", cursor);
@@ -188,6 +254,10 @@ async function restListExecutions(url) {
   if (status) {
     if (!VALID_EXEC_STATUSES.has(status)) return { status: 400, body: { error: "status must be one of: error, new, running, success, waiting" } };
     query.set("status", status);
+  }
+  if (projectId) {
+    if (!/^[A-Za-z0-9_-]+$/.test(projectId) || projectId.length > 64) return { status: 400, body: { error: "Invalid projectId" } };
+    query.set("projectId", projectId);
   }
   const qs = query.toString();
   const data = await n8nGet(`/executions${qs ? `?${qs}` : ""}`);
@@ -242,6 +312,7 @@ function serveHomepage(res) {
 <h2>REST API Endpoints</h2>
 <p>Authenticated with <code>X-N8N-API-KEY</code> header.</p>
 <div class="endpoint"><span class="method">GET</span><span class="path">/health</span><span class="desc">Health check (no auth)</span></div>
+<div class="endpoint"><span class="method">GET</span><span class="path">/api/v1/projects</span><span class="desc">List all projects</span></div>
 <div class="endpoint"><span class="method">GET</span><span class="path">/api/v1/workflows</span><span class="desc">List all workflows</span></div>
 <div class="endpoint"><span class="method">GET</span><span class="path">/api/v1/workflows/:id</span><span class="desc">Get workflow details</span></div>
 <div class="endpoint"><span class="method">GET</span><span class="path">/api/v1/executions</span><span class="desc">List executions</span></div>
@@ -343,7 +414,9 @@ const httpServer = createServer(async (req, res) => {
 
     try {
       let result;
-      if (path === "/api/v1/workflows") {
+      if (path === "/api/v1/projects") {
+        result = await restListProjects(url);
+      } else if (path === "/api/v1/workflows") {
         result = await restListWorkflows(url);
       } else if (path === "/api/v1/executions") {
         result = await restListExecutions(url);
