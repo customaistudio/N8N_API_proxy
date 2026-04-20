@@ -134,9 +134,17 @@ function registerTools(server) {
   server.tool(
     "get_execution",
     "Get full details of a specific n8n execution by ID, including node results and timing (secrets are redacted)",
-    { id: EXECUTION_ID_SCHEMA.describe("The execution ID") },
-    async ({ id }) => {
-      const data = await n8nGet(`/executions/${encodeURIComponent(id)}`);
+    {
+      id: EXECUTION_ID_SCHEMA.describe("The execution ID"),
+      includeData: z.boolean().optional().default(true).describe(
+        "Whether to include the execution's detailed data (node inputs/outputs, error messages). Defaults to true."
+      ),
+    },
+    async ({ id, includeData }) => {
+      const params = new URLSearchParams();
+      if (includeData !== false) params.set("includeData", "true");
+      const query = params.toString();
+      const data = await n8nGet(`/executions/${encodeURIComponent(id)}${query ? `?${query}` : ""}`);
       return { content: [{ type: "text", text: JSON.stringify(scrubDeep(data), null, 2) }] };
     }
   );
@@ -271,9 +279,11 @@ async function restListExecutions(url) {
   };
 }
 
-async function restGetExecution(id) {
+async function restGetExecution(id, url) {
   if (!/^[A-Za-z0-9]+$/.test(id) || id.length > 64) return { status: 400, body: { error: "Invalid execution ID" } };
-  const data = await n8nGet(`/executions/${encodeURIComponent(id)}`);
+  const includeData = url?.searchParams.get("includeData") !== "false";
+  const qs = includeData ? "?includeData=true" : "";
+  const data = await n8nGet(`/executions/${encodeURIComponent(id)}${qs}`);
   return { status: 200, body: scrubDeep(data) };
 }
 
@@ -424,7 +434,7 @@ const httpServer = createServer(async (req, res) => {
         const wfMatch = path.match(/^\/api\/v1\/workflows\/([A-Za-z0-9]+)$/);
         const exMatch = path.match(/^\/api\/v1\/executions\/([A-Za-z0-9]+)$/);
         if (wfMatch) result = await restGetWorkflow(wfMatch[1]);
-        else if (exMatch) result = await restGetExecution(exMatch[1]);
+        else if (exMatch) result = await restGetExecution(exMatch[1], url);
         else return json(res, 404, { error: "Not found" });
       }
       return json(res, result.status, result.body);

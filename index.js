@@ -244,9 +244,15 @@ server.tool(
   "Get full details of a specific n8n execution by ID, including node results and timing (secrets are redacted)",
   {
     id: EXECUTION_ID_SCHEMA.describe("The execution ID"),
+    includeData: z.boolean().optional().default(true).describe(
+      "Whether to include the execution's detailed data (node inputs/outputs, error messages). Defaults to true."
+    ),
   },
-  async ({ id }) => {
-    const data = await n8nGet(`/executions/${encodeURIComponent(id)}`);
+  async ({ id, includeData }) => {
+    const params = new URLSearchParams();
+    if (includeData !== false) params.set("includeData", "true");
+    const query = params.toString();
+    const data = await n8nGet(`/executions/${encodeURIComponent(id)}${query ? `?${query}` : ""}`);
     const scrubbed = scrubDeep(data);
 
     return {

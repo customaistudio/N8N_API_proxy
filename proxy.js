@@ -440,12 +440,14 @@ async function listExecutions(url) {
   };
 }
 
-async function getExecution(id) {
+async function getExecution(id, url) {
   if (!/^[A-Za-z0-9]+$/.test(id) || id.length > 64) {
     return { status: 400, body: { error: "Invalid execution ID" } };
   }
 
-  const data = await n8nGet(`/executions/${encodeURIComponent(id)}`);
+  const includeData = url?.searchParams.get("includeData") !== "false";
+  const qs = includeData ? "?includeData=true" : "";
+  const data = await n8nGet(`/executions/${encodeURIComponent(id)}${qs}`);
   return { status: 200, body: scrubDeep(data) };
 }
 
@@ -516,7 +518,7 @@ async function handleRequest(req, res) {
       if (wfMatch) {
         result = await getWorkflow(wfMatch[1]);
       } else if (exMatch) {
-        result = await getExecution(exMatch[1]);
+        result = await getExecution(exMatch[1], url);
       } else {
         return json(res, 404, { error: "Not found — available: /api/v1/workflows, /api/v1/executions" }, req);
       }
