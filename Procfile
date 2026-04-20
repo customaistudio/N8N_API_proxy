@@ -1,1 +1,1 @@
-web: npm run proxy:production
+web: npm run mcp:production

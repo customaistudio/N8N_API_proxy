@@ -8,7 +8,8 @@
     "start": "node --env-file=.env index.js",
     "proxy": "node --env-file=.env proxy.js",
     "start:production": "node index.js",
-    "proxy:production": "node proxy.js"
+    "proxy:production": "node proxy.js",
+    "mcp:production": "node mcp-http.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.12.1",
