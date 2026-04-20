@@ -103,6 +103,153 @@ function authenticate(req) {
   );
 }
 
+// ---------- Homepage ----------
+function serveHomepage(res) {
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>n8n Read-Only API Proxy</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #0f1117; color: #e1e4e8; line-height: 1.6; padding: 2rem 1rem; }
+  .container { max-width: 780px; margin: 0 auto; }
+  h1 { font-size: 1.8rem; margin-bottom: 0.25rem; color: #fff; }
+  .subtitle { color: #8b949e; margin-bottom: 2rem; font-size: 1.05rem; }
+  h2 { font-size: 1.2rem; color: #fff; margin: 2rem 0 0.75rem; padding-bottom: 0.4rem; border-bottom: 1px solid #21262d; }
+  h3 { font-size: 1rem; color: #c9d1d9; margin: 1.25rem 0 0.5rem; }
+  p, li { color: #c9d1d9; }
+  ul, ol { padding-left: 1.5rem; margin-bottom: 0.75rem; }
+  li { margin-bottom: 0.35rem; }
+  code { background: #161b22; padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.9em; color: #f0883e; font-family: "SF Mono", "Fira Code", monospace; }
+  pre { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 1rem; overflow-x: auto; margin: 0.75rem 0 1rem; }
+  pre code { background: none; padding: 0; color: #e1e4e8; }
+  .badge { display: inline-block; background: #1f6feb33; color: #58a6ff; padding: 0.15em 0.6em; border-radius: 12px; font-size: 0.8rem; font-weight: 500; margin-left: 0.5rem; }
+  .endpoint { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 0.75rem 1rem; margin: 0.5rem 0; display: flex; align-items: center; gap: 0.75rem; }
+  .method { background: #238636; color: #fff; padding: 0.15em 0.5em; border-radius: 4px; font-size: 0.8rem; font-weight: 600; font-family: monospace; }
+  .path { color: #58a6ff; font-family: monospace; font-size: 0.95rem; }
+  .desc { color: #8b949e; font-size: 0.85rem; margin-left: auto; }
+  .card { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 1.25rem; margin: 1rem 0; }
+  .warn { border-color: #d29922; }
+  .warn-title { color: #d29922; font-weight: 600; margin-bottom: 0.5rem; }
+  .section-label { display: inline-block; background: #23862033; color: #3fb950; padding: 0.1em 0.5em; border-radius: 4px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem; }
+  a { color: #58a6ff; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .footer { margin-top: 3rem; padding-top: 1.5rem; border-top: 1px solid #21262d; color: #484f58; font-size: 0.85rem; text-align: center; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>n8n Read-Only API Proxy</h1>
+<p class="subtitle">A secure, read-only HTTP proxy for your n8n instance. Query workflows and executions without exposing your n8n API key or allowing write operations.</p>
+
+<h2>Environment Variables</h2>
+<p>Set these on your Railway service (or wherever you deploy):</p>
+<div class="card">
+<table style="width:100%; border-collapse:collapse;">
+  <tr><td style="padding:0.3rem 0;"><code>N8N_BASE_URL</code></td><td style="padding:0.3rem 0; color:#8b949e;">Your n8n instance URL, e.g. <code>https://your-instance.app.n8n.cloud</code></td></tr>
+  <tr><td style="padding:0.3rem 0;"><code>N8N_API_KEY</code></td><td style="padding:0.3rem 0; color:#8b949e;">Your n8n API key (kept secret, never exposed to clients)</td></tr>
+  <tr><td style="padding:0.3rem 0;"><code>PROXY_API_KEY</code></td><td style="padding:0.3rem 0; color:#8b949e;">The key clients use to authenticate with this proxy</td></tr>
+  <tr><td style="padding:0.3rem 0;"><code>HOST</code></td><td style="padding:0.3rem 0; color:#8b949e;">Bind address (default <code>127.0.0.1</code>, use <code>0.0.0.0</code> for Railway)</td></tr>
+  <tr><td style="padding:0.3rem 0;"><code>TRUST_PROXY</code></td><td style="padding:0.3rem 0; color:#8b949e;">Set to <code>true</code> if behind a reverse proxy (Railway, etc.)</td></tr>
+  <tr><td style="padding:0.3rem 0;"><code>ALLOWED_ORIGIN</code></td><td style="padding:0.3rem 0; color:#8b949e;">CORS origin, e.g. <code>https://yourdomain.com</code> (optional)</td></tr>
+</table>
+</div>
+
+<h2>API Endpoints</h2>
+<p>All endpoints (except <code>/health</code> and this page) require the <code>X-N8N-API-KEY</code> header set to your <code>PROXY_API_KEY</code>.</p>
+
+<div class="endpoint"><span class="method">GET</span> <span class="path">/health</span> <span class="desc">Health check (no auth)</span></div>
+<div class="endpoint"><span class="method">GET</span> <span class="path">/api/v1/workflows</span> <span class="desc">List all workflows</span></div>
+<div class="endpoint"><span class="method">GET</span> <span class="path">/api/v1/workflows/:id</span> <span class="desc">Get workflow details</span></div>
+<div class="endpoint"><span class="method">GET</span> <span class="path">/api/v1/executions</span> <span class="desc">List executions</span></div>
+<div class="endpoint"><span class="method">GET</span> <span class="path">/api/v1/executions/:id</span> <span class="desc">Get execution details</span></div>
+
+<h3>Query Parameters</h3>
+<ul>
+  <li><code>/api/v1/workflows</code> &mdash; <code>cursor</code>, <code>limit</code> (1-250), <code>active</code> (true/false)</li>
+  <li><code>/api/v1/executions</code> &mdash; <code>cursor</code>, <code>limit</code> (1-250), <code>workflowId</code>, <code>status</code> (error/new/running/success/waiting)</li>
+</ul>
+
+<h2>Quick Start</h2>
+
+<div class="section-label">Using curl</div>
+<pre><code># List workflows
+curl -H "X-N8N-API-KEY: YOUR_PROXY_API_KEY" \\
+  https://your-railway-app.up.railway.app/api/v1/workflows
+
+# Get a specific workflow
+curl -H "X-N8N-API-KEY: YOUR_PROXY_API_KEY" \\
+  https://your-railway-app.up.railway.app/api/v1/workflows/abc123
+
+# List failed executions
+curl -H "X-N8N-API-KEY: YOUR_PROXY_API_KEY" \\
+  "https://your-railway-app.up.railway.app/api/v1/executions?status=error"</code></pre>
+
+<h2>MCP Server (for Claude Desktop / AI Assistants)</h2>
+<p>This project also includes an MCP (Model Context Protocol) server that lets AI assistants like Claude read your n8n workflows directly. The MCP server runs locally via stdio &mdash; it is <strong>not</strong> what's deployed on Railway.</p>
+
+<h3>Setup</h3>
+<ol>
+  <li>Clone the repo locally:
+    <pre><code>git clone https://github.com/customaistudio/N8N_API_proxy.git
+cd N8N_API_proxy
+npm install</code></pre>
+  </li>
+  <li>Create a <code>.env</code> file:
+    <pre><code>N8N_API_KEY=your-n8n-api-key
+N8N_BASE_URL=https://your-instance.app.n8n.cloud</code></pre>
+  </li>
+  <li>Add to your Claude Desktop config (<code>claude_desktop_config.json</code>):
+    <pre><code>{
+  "mcpServers": {
+    "n8n-readonly": {
+      "command": "node",
+      "args": ["--env-file=.env", "index.js"],
+      "cwd": "/path/to/N8N_API_proxy"
+    }
+  }
+}</code></pre>
+  </li>
+  <li>Restart Claude Desktop. You'll see 4 new tools available:
+    <ul>
+      <li><code>list_workflows</code> &mdash; List all workflows with IDs, names, active status, and tags</li>
+      <li><code>get_workflow</code> &mdash; Get full workflow details (nodes, connections, settings)</li>
+      <li><code>list_executions</code> &mdash; List executions with optional filters</li>
+      <li><code>get_execution</code> &mdash; Get full execution details including node results</li>
+    </ul>
+  </li>
+</ol>
+
+<div class="card warn">
+  <div class="warn-title">Security Notes</div>
+  <ul>
+    <li>All responses have secrets automatically redacted (API keys, tokens, passwords, credentials)</li>
+    <li>Only GET requests are allowed &mdash; no one can modify your workflows through this proxy</li>
+    <li>Your real n8n API key is never exposed to clients</li>
+    <li>Auth brute-force protection: 10 failures per IP per minute</li>
+  </ul>
+</div>
+
+<div class="footer">
+  <a href="https://github.com/customaistudio/N8N_API_proxy">GitHub</a> &middot; n8n Read-Only API Proxy v1.1.0
+</div>
+
+</div>
+</body>
+</html>`;
+
+  res.writeHead(200, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Length": Buffer.byteLength(html),
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+  });
+  res.end(html);
+}
+
 // ---------- Route handlers ----------
 async function listWorkflows(url) {
   const params = url.searchParams;
@@ -249,6 +396,11 @@ async function handleRequest(req, res) {
   // Health check (no auth required)
   if (req.method === "GET" && req.url === "/health") {
     return json(res, 200, { status: "ok" }, req);
+  }
+
+  // Homepage (no auth required)
+  if (req.method === "GET" && (req.url === "/" || req.url === "/index.html")) {
+    return serveHomepage(res);
   }
 
   // CORS preflight
